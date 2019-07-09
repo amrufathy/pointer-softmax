@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from src.utils import sequence_mask
 
@@ -9,7 +10,7 @@ class EncoderRNN(nn.Module):
     Applies a bi-directional GRU to encode a sequence.
     """
 
-    def __init__(self, input_size, emb_size, hidden_size, embedding_matrix=None):
+    def __init__(self, input_size, emb_size, hidden_size, pad_idx=0, embedding_matrix=None):
         """
         :param input_size: vocab size of source (input) sentences
         :param emb_size: desired embedding size for embedding layer
@@ -19,7 +20,7 @@ class EncoderRNN(nn.Module):
         super(EncoderRNN, self).__init__()
 
         # embedding layer (with ability to add pre-trained vectors)
-        self.embed = nn.Embedding(input_size, emb_size)
+        self.embed = nn.Embedding(input_size, emb_size, padding_idx=pad_idx)
 
         if embedding_matrix is not None:
             self.embed.weight = nn.Parameter(torch.tensor(embedding_matrix, dtype=torch.float32))
@@ -56,7 +57,6 @@ class EncoderRNN(nn.Module):
 class Attention(nn.Module):
     """
     Bahdanau MLP attention
-
     """
 
     def __init__(self, hidden_size):
@@ -72,7 +72,6 @@ class Attention(nn.Module):
 
     def forward(self, dec_state, enc_state, src_length):
         """
-
         :param dec_state: previous decoder hidden state
         :param enc_state: encoder hidden features for attention
         :param src_length: lengths of source sequences to create masks for attention
@@ -99,24 +98,20 @@ class Attention(nn.Module):
         return context, alphas
 
 
-class DecoderRNN(nn.Module):
+class Decoder(nn.Module):
     """
-    Decodes a sequence of words given an initial context vector
-        representing the input sequence and using a Bahdanau (MLP) attention.
+    Base class for a generic RNN decoder that unrolls one
+        step at a time.
     """
 
-    def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
+    def __init__(self, input_size, emb_size, hidden_size):
         """
         :param input_size: vocab size of target (output) sentences
         :param emb_size: desired embedding size for embedding layer
         :param hidden_size: number of hidden units of GRU
             NOTE: emb_size, hidden_size are currently the same as the encoder's
-        :param dropout: dropout applied to output of RNN
         """
-        super(DecoderRNN, self).__init__()
-
-        # output size is the same as input size
-        output_size = input_size
+        super(Decoder, self).__init__()
 
         self.attention = Attention(hidden_size)
         self.embed = nn.Embedding(input_size, emb_size)
@@ -126,16 +121,13 @@ class DecoderRNN(nn.Module):
         # to initialize from the final encoder state of last layer
         self.bridge = nn.Linear(2 * hidden_size, hidden_size, bias=True)
 
-        self.dropout_layer = nn.Dropout(p=dropout)
-        self.output_layer = nn.Linear(hidden_size + 2 * hidden_size + emb_size,
-                                      output_size, bias=False)
-
-    def _forward_step(self, prev_embed, encoder_hidden, src_length, hidden):
+    def _forward_step(self, *_input):
         """
         Performs a single decoder step (1 word)
 
         :param prev_embed: embedded previous word (in target sequence)
         :param encoder_hidden: encoder hidden features for attention
+        :param src: source sequences (used only in pointer softmax)
         :param src_length: lengths of source sequences to create masks for attention
         :param hidden: previous decoder hidden state
 
@@ -145,6 +137,96 @@ class DecoderRNN(nn.Module):
             - hidden: new decoder hidden state
                 shape: [1 x batch x hidden_size]
         """
+        raise NotImplementedError
+
+    def forward(self, src, trg, encoder_hidden, encoder_final, src_length, trg_length):
+        """
+        Unroll the decoder one step at a time.
+
+        :param src: source target sequences (used only for pointer softmax decoder)
+        :param trg: target input sequences
+        :param encoder_hidden: hidden states from the encoder
+        :param encoder_final: last state from the encoder
+        :param src_length: lengths of source sequences to create masks for attention
+        :param trg_length: lengths of target sequences to get RNN unroll steps
+
+        :return:
+            - outputs: concatenated decoder outputs for whole sequence
+                shape: [batch x max_steps x output_size]
+            - hidden: last decoder hidden state
+                shape: [1 x batch x hidden_size]
+        """
+        # maximum number of steps to unroll the RNN
+        max_steps = trg_length.max()
+
+        # initialize decoder hidden state
+        hidden = self.init_hidden(encoder_final)  # [1 x batch x hidden_size]
+
+        # store output vectors
+        outputs = []
+
+        trg_embedded = self.embed(trg)  # [batch x max_steps x emb]
+
+        # unroll the decoder RNN for max_steps
+        # TODO: use teacher forcing
+        for i in range(max_steps):
+            prev_embed = trg_embedded[:, i].unsqueeze(1)  # [batch x 1 x emb]
+            output, hidden = self._forward_step(
+                prev_embed, encoder_hidden, src, src_length, hidden)
+            outputs.append(output)
+
+        # [batch x max_steps x output_size]
+        outputs = torch.cat(outputs, dim=1)
+
+        return outputs, hidden
+
+    def init_hidden(self, encoder_final):
+        """
+        Returns the initial decoder state, conditioned on the final encoder state.
+
+        :param encoder_final: final state from the last layer of the encoder
+            shape: [batch x directions * hidden_size]
+
+        :return: initial hidden state for GRU
+            shape: [1 x batch x hidden_size]
+        """
+        return torch.tanh(self.bridge(encoder_final)).unsqueeze(0)
+
+    def _decode_mechanism(self, logits):
+        """
+        Helper function to decode the logits to a sequence of words from the vocab
+
+        :param logits: probability distribution of all words in vocab
+
+        :return: index of most probable word in the vocab
+        """
+        logits = logits.squeeze()
+        values, indices = torch.max(logits, dim=1)
+        indices = indices.unsqueeze(1).to(torch.float32)
+
+        return indices
+
+
+class DecoderRNN(Decoder):
+    """
+    Decodes a sequence of words given an initial context vector
+        representing the input sequence and using a Bahdanau (MLP) attention.
+    """
+
+    def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
+        """
+        :param dropout: dropout applied to output of RNN
+        """
+        super(DecoderRNN, self).__init__(input_size, emb_size, hidden_size)
+
+        # output size is the same as input size
+        output_size = input_size
+
+        self.dropout_layer = nn.Dropout(p=dropout)
+        self.output_layer = nn.Linear(hidden_size + 2 * hidden_size + emb_size,
+                                      output_size, bias=False)
+
+    def _forward_step(self, prev_embed, encoder_hidden, src, src_length, hidden):
         # compute context vector using attention mechanism
         prev_dec_state = hidden.squeeze().unsqueeze(1)  # [batch x 1 x hidden_size]
         context, _ = self.attention(
@@ -159,62 +241,69 @@ class DecoderRNN(nn.Module):
         #   instead of RNN hidden values
         output = torch.cat([prev_embed, output, context], dim=2)
         # [batch x 1 x output_size]
-        output = self.output_layer(self.dropout_layer(output))
+        output = torch.log_softmax(self.output_layer(self.dropout_layer(output)), dim=-1)
 
         return output, hidden
 
-    def forward(self, trg, encoder_hidden, encoder_final,
-                src_length, trg_length):
-        """
-        Unroll the decoder one step at a time.
 
-        :param trg: target input sequences
-        :param encoder_hidden: hidden states from the encoder
-        :param encoder_final: last state from the encoder
-        :param src_length: lengths of source sequences to create masks for attention
-        :param trg_length: lengths of target sequences to get RNN unroll steps
+class DecoderPS(Decoder):
+    """
+    Attention decoder with pointer softmax layer
+    """
+    def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
+        super(DecoderPS, self).__init__(input_size, emb_size, hidden_size)
 
-        :return:
-            - outputs: concatenated decoder outputs for whole sequence
-                shape: [batch x max_steps x output_size]
-            - hidden: last decoder hidden state
-                shape: [1 x batch x hidden_size]
-        """
+        # output size is the same as input size
+        output_size = input_size
 
-        # maximum number of steps to unroll the RNN
-        max_steps = trg_length.max()
+        # pointer softmax layers
+        self.switching_layer = nn.Linear(2 * hidden_size + hidden_size, 1, bias=False)
+        # normal output layer with output dim = vocab size
+        self.dropout_layer = nn.Dropout(p=dropout)
+        self.shortlist_softmax = nn.Linear(hidden_size + 2 * hidden_size + emb_size, output_size, bias=False)
 
-        # initialize decoder hidden state
-        hidden = self.init_hidden(encoder_final)  # [1 x batch x hidden_size]
+    def _forward_step(self, prev_embed, encoder_hidden, src, src_length, hidden):
+        # compute context vector using attention mechanism
+        prev_dec_state = hidden.squeeze().unsqueeze(1)  # [batch x 1 x hidden_size]
+        context, attn_probs = self.attention(
+            dec_state=prev_dec_state, enc_state=encoder_hidden,
+            src_length=src_length)
 
-        # store output vectors
-        outputs = []
+        # update rnn hidden state
+        rnn_input = torch.cat([prev_embed, context], dim=2)
+        output, hidden = self.rnn(rnn_input, hidden)
 
-        trg_embedded = self.embed(trg)  # [batch x max_steps x emb]
+        # switching layer is conditioned on context vector and hidden state of the decoder
+        switch_input = torch.cat([prev_dec_state, context], dim=2)
+        switch_prob = torch.ge(torch.sigmoid(self.switching_layer(switch_input)), 0.5).to(torch.float32)  # [batch x 1 x 1]
 
-        # unroll the decoder RNN for max_steps
-        for i in range(max_steps):
-            prev_embed = trg_embedded[:, i].unsqueeze(1)  # [batch x 1 x emb]
-            output, hidden = self._forward_step(
-                prev_embed, encoder_hidden, src_length, hidden)
-            outputs.append(output)
+        # vocab output
+        v_in = torch.cat([prev_embed, output, context], dim=2)
+        # [batch x 1 x output_size]
+        vocab_out = torch.log_softmax(self.shortlist_softmax(self.dropout_layer(v_in)), dim=-1)
 
-        # [batch x max_steps x output_size]
-        outputs = torch.cat(outputs, dim=1)
+        # pointer output
+        # use attn_probs tensor to calculate the location of word to copy
+        log_attn = torch.log(attn_probs).squeeze()  # [batch x src_len]
 
-        return outputs, hidden
+        _, a_indices = torch.max(log_attn, dim=1)
+        a_indices = a_indices.unsqueeze(1)  # [batch x 1]
 
-    def init_hidden(self, encoder_final):
-        """
-        Returns the initial decoder state, conditioned on the final encoder state.
-        
-        :param encoder_final: final state from the last layer of the encoder
-            shape: [batch x directions * hidden_size]
+        # get word indices from a_indices
+        src_indices = src.gather(dim=1, index=a_indices)  # [batch x 1]
 
-        :return: initial hidden state for GRU
-            shape: [1 x batch x hidden_size]
-        """
-        return torch.tanh(self.bridge(encoder_final)).unsqueeze(0)
+        # create one-hot-encoded vectors from word indices
+        pointer_output = F.one_hot(src_indices, num_classes=vocab_out.size(-1)).to(torch.float32)  # [batch x 1 x output_size]
+
+        # noinspection PyTypeChecker
+        v1 = switch_prob * vocab_out
+        # noinspection PyTypeChecker
+        v2 = (1 - switch_prob) * pointer_output
+
+        # select based on switching variable
+        output = torch.where(switch_prob == 1, v1, v2)  # [batch x 1 x output_size]
+
+        return output, hidden
 
 
 class Seq2Seq(nn.Module):
@@ -222,7 +311,7 @@ class Seq2Seq(nn.Module):
     Standard Encoder-Decoder architecture.
     """
 
-    def __init__(self, src_vocab, trg_vocab, emb_size, hidden_size, dropout=.3, embedding_matrix=None):
+    def __init__(self, src_vocab, trg_vocab, emb_size, hidden_size, dropout=.3, pad_idx=0, embedding_matrix=None):
         """
         :param src_vocab: vocab size of source (input) sentences
         :param trg_vocab: vocab size of target (output) sentences
@@ -232,7 +321,7 @@ class Seq2Seq(nn.Module):
         :param embedding_matrix: optional, matrix of pre-trained embedding vectors
         """
         super(Seq2Seq, self).__init__()
-        self.encoder = EncoderRNN(src_vocab, emb_size, hidden_size, embedding_matrix=embedding_matrix)
+        self.encoder = EncoderRNN(src_vocab, emb_size, hidden_size, pad_idx=pad_idx, embedding_matrix=embedding_matrix)
         self.decoder = DecoderRNN(trg_vocab, emb_size, hidden_size, dropout)
 
     def forward(self, src, trg, src_length, trg_length):
@@ -247,10 +336,21 @@ class Seq2Seq(nn.Module):
         :return: decoder's output
         """
         encoder_hidden, encoder_final = self.encoder(src)
-        return self.decoder(trg, encoder_hidden, encoder_final, src_length, trg_length)
+        return self.decoder(src, trg, encoder_hidden, encoder_final, src_length, trg_length)
 
 
-def make_baseline_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, dropout=.3, embedding_matrix=None):
+class PSSeq2Seq(Seq2Seq):
+    """
+    Encoder-Decoder architecture with a pointer softmax decoder
+    """
+
+    def __init__(self, src_vocab, trg_vocab, emb_size, hidden_size, dropout=.3, pad_idx=0, embedding_matrix=None):
+        super(PSSeq2Seq, self).__init__(src_vocab, trg_vocab, emb_size, hidden_size, dropout, pad_idx, embedding_matrix)
+        # overwrite decoder
+        self.decoder = DecoderPS(trg_vocab, emb_size, hidden_size, dropout)
+
+
+def make_baseline_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, dropout=.3, pad_idx=0, embedding_matrix=None):
     """
     Create baseline seq2seq model from given parameters and pass it to GPU
     """
@@ -258,4 +358,15 @@ def make_baseline_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, dro
         err_msg = 'Embedding matrix has inconsistent dimensions'
         assert embedding_matrix.size(0) == src_vocab and embedding_matrix.size(1) == emb_size, err_msg
 
-    return Seq2Seq(src_vocab, tgt_vocab, emb_size, hidden_size, dropout, embedding_matrix).cuda()
+    return Seq2Seq(src_vocab, tgt_vocab, emb_size, hidden_size, dropout, pad_idx, embedding_matrix).cuda()
+
+
+def make_ps_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, dropout=.3, pad_idx=0, embedding_matrix=None):
+    """
+    Create pointer softmax seq2seq model from given parameters and pass it to GPU
+    """
+    if embedding_matrix is not None:
+        err_msg = 'Embedding matrix has inconsistent dimensions'
+        assert embedding_matrix.size(0) == src_vocab and embedding_matrix.size(1) == emb_size, err_msg
+
+    return PSSeq2Seq(src_vocab, tgt_vocab, emb_size, hidden_size, dropout, pad_idx, embedding_matrix).cuda()

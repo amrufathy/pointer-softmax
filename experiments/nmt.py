@@ -3,7 +3,7 @@ import torch
 from torchtext.data import Field, BucketIterator
 from torchtext.datasets import Multi30k
 
-from src.manager import BaselineModelManager
+from src.manager import PointerSoftmaxModelManager
 
 src = Field(batch_first=True, include_lengths=True, lower=True)
 trg = Field(batch_first=True, include_lengths=True, lower=True)
@@ -25,7 +25,7 @@ N_EPOCHS = 3
 
 best_validation_loss = float('inf')
 
-model = BaselineModelManager(src_vocab=len(src.vocab), tgt_vocab=len(trg.vocab), pad_idx=pad_idx)
+model = PointerSoftmaxModelManager(src_vocab=len(src.vocab), tgt_vocab=len(trg.vocab), pad_idx=pad_idx)
 
 for epoch in range(N_EPOCHS):
     train_loss = model.train(train_iterator)

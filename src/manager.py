@@ -1,9 +1,8 @@
 import torch
 from torch import nn, optim
-from torch.nn import functional as F
 from tqdm import tqdm
 
-from src.modules import make_baseline_model
+from src.modules import make_baseline_model, make_ps_model
 
 
 class ModelManager:
@@ -46,9 +45,6 @@ class ModelManager:
             trg, trg_lengths = batch.trg
 
             output, _ = self.model(src, trg, src_lengths, trg_lengths)
-
-            # compute logits
-            output = F.log_softmax(output, dim=-1)
 
             # flatten output, trg tensors and ignore <sos> token
             # output -> [(seq_len - 1) * batch x output_size] (2D logits)
@@ -99,9 +95,6 @@ class ModelManager:
 
                 output, _ = self.model(src, trg, src_lengths, trg_lengths)
 
-                # compute logits
-                output = F.log_softmax(output, dim=-1)
-
                 # reshape same as train loop
                 y_pred = output[:, 1:].contiguous().view(-1, output.size(-1))
                 y = trg[:, 1:].contiguous().view(-1)
@@ -117,9 +110,22 @@ class ModelManager:
 
 class BaselineModelManager(ModelManager):
     def __init__(self, src_vocab, tgt_vocab, pad_idx=0):
-        super(BaselineModelManager, self).__init__(src_vocab, tgt_vocab)
+        super(BaselineModelManager, self).__init__(src_vocab, tgt_vocab, pad_idx)
         # Seq2Seq model
-        self.model = make_baseline_model(src_vocab, tgt_vocab)
+        self.model = make_baseline_model(src_vocab, tgt_vocab, pad_idx=pad_idx)
+        # optimizer
+        self.optimizer = optim.Adam(self.model.parameters())
+        # loss function criterion
+        self.criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+        # gradient clip value
+        self.clip_value = 10
+
+
+class PointerSoftmaxModelManager(ModelManager):
+    def __init__(self, src_vocab, tgt_vocab, pad_idx=0):
+        super(PointerSoftmaxModelManager, self).__init__(src_vocab, tgt_vocab, pad_idx)
+        # Seq2Seq model
+        self.model = make_ps_model(src_vocab, tgt_vocab, pad_idx=pad_idx)
         # optimizer
         self.optimizer = optim.Adam(self.model.parameters())
         # loss function criterion
