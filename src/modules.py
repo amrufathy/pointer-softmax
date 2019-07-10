@@ -192,7 +192,8 @@ class Decoder(nn.Module):
         """
         return torch.tanh(self.bridge(encoder_final)).unsqueeze(0)
 
-    def _decode_mechanism(self, logits):
+    @staticmethod
+    def decode_mechanism(logits):
         """
         Helper function to decode the logits to a sequence of words from the vocab
 
@@ -250,6 +251,7 @@ class DecoderPS(Decoder):
     """
     Attention decoder with pointer softmax layer
     """
+
     def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
         super(DecoderPS, self).__init__(input_size, emb_size, hidden_size)
 
@@ -280,7 +282,7 @@ class DecoderPS(Decoder):
         # vocab output
         v_in = torch.cat([prev_embed, output, context], dim=2)
         # [batch x 1 x output_size]
-        vocab_out = torch.log_softmax(self.shortlist_softmax(self.dropout_layer(v_in)), dim=-1)
+        vocab_output = torch.log_softmax(self.shortlist_softmax(self.dropout_layer(v_in)), dim=-1)
 
         # pointer output
         # use attn_probs tensor to calculate the location of word to copy
@@ -293,15 +295,10 @@ class DecoderPS(Decoder):
         src_indices = src.gather(dim=1, index=a_indices)  # [batch x 1]
 
         # create one-hot-encoded vectors from word indices
-        pointer_output = F.one_hot(src_indices, num_classes=vocab_out.size(-1)).to(torch.float32)  # [batch x 1 x output_size]
-
-        # noinspection PyTypeChecker
-        v1 = switch_prob * vocab_out
-        # noinspection PyTypeChecker
-        v2 = (1 - switch_prob) * pointer_output
+        pointer_output = F.one_hot(src_indices, num_classes=vocab_output.size(-1)).to(torch.float32)  # [batch x 1 x output_size]
 
         # select based on switching variable
-        output = torch.where(switch_prob == 1, v1, v2)  # [batch x 1 x output_size]
+        output = torch.where(switch_prob == 1, vocab_output, pointer_output)  # [batch x 1 x output_size]
 
         return output, hidden
 
