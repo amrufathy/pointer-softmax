@@ -104,7 +104,7 @@ class Decoder(nn.Module):
         step at a time.
     """
 
-    def __init__(self, input_size, emb_size, hidden_size):
+    def __init__(self, input_size, emb_size, hidden_size, pad_idx=0):
         """
         :param input_size: vocab size of target (output) sentences
         :param emb_size: desired embedding size for embedding layer
@@ -114,12 +114,14 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
 
         self.attention = Attention(hidden_size)
-        self.embed = nn.Embedding(input_size, emb_size)
+        self.embed = nn.Embedding(input_size, emb_size, padding_idx=pad_idx)
         # input to GRU is the embedded target sequences + encoder's bi-directional hidden states
         self.rnn = nn.GRU(emb_size + 2 * hidden_size, hidden_size, batch_first=True)
 
         # to initialize from the final encoder state of last layer
         self.bridge = nn.Linear(2 * hidden_size, hidden_size, bias=True)
+
+        self.teacher_forcing_ratio = 0.5
 
     def _forward_step(self, *_input):
         """
@@ -201,9 +203,7 @@ class Decoder(nn.Module):
 
         :return: index of most probable word in the vocab
         """
-        logits = logits.squeeze()
-        values, indices = torch.max(logits, dim=1)
-        indices = indices.unsqueeze(1).to(torch.float32)
+        _, indices = torch.max(logits, dim=2)
 
         return indices
 
@@ -214,11 +214,11 @@ class DecoderRNN(Decoder):
         representing the input sequence and using a Bahdanau (MLP) attention.
     """
 
-    def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
+    def __init__(self, input_size, emb_size, hidden_size, dropout=.3, pad_idx=0):
         """
         :param dropout: dropout applied to output of RNN
         """
-        super(DecoderRNN, self).__init__(input_size, emb_size, hidden_size)
+        super(DecoderRNN, self).__init__(input_size, emb_size, hidden_size, pad_idx)
 
         # output size is the same as input size
         output_size = input_size
@@ -252,8 +252,8 @@ class DecoderPS(Decoder):
     Attention decoder with pointer softmax layer
     """
 
-    def __init__(self, input_size, emb_size, hidden_size, dropout=.3):
-        super(DecoderPS, self).__init__(input_size, emb_size, hidden_size)
+    def __init__(self, input_size, emb_size, hidden_size, dropout=.3, pad_idx=0):
+        super(DecoderPS, self).__init__(input_size, emb_size, hidden_size, pad_idx)
 
         # output size is the same as input size
         output_size = input_size
@@ -318,8 +318,8 @@ class Seq2Seq(nn.Module):
         :param embedding_matrix: optional, matrix of pre-trained embedding vectors
         """
         super(Seq2Seq, self).__init__()
-        self.encoder = EncoderRNN(src_vocab, emb_size, hidden_size, pad_idx=pad_idx, embedding_matrix=embedding_matrix)
-        self.decoder = DecoderRNN(trg_vocab, emb_size, hidden_size, dropout)
+        self.encoder = EncoderRNN(src_vocab, emb_size, hidden_size, pad_idx, embedding_matrix)
+        self.decoder = DecoderRNN(trg_vocab, emb_size, hidden_size, dropout, pad_idx)
 
     def forward(self, src, trg, src_length, trg_length):
         """
@@ -344,7 +344,7 @@ class PSSeq2Seq(Seq2Seq):
     def __init__(self, src_vocab, trg_vocab, emb_size, hidden_size, dropout=.3, pad_idx=0, embedding_matrix=None):
         super(PSSeq2Seq, self).__init__(src_vocab, trg_vocab, emb_size, hidden_size, dropout, pad_idx, embedding_matrix)
         # overwrite decoder
-        self.decoder = DecoderPS(trg_vocab, emb_size, hidden_size, dropout)
+        self.decoder = DecoderPS(trg_vocab, emb_size, hidden_size, dropout, pad_idx)
 
 
 def make_baseline_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, dropout=.3, pad_idx=0, embedding_matrix=None):
