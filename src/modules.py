@@ -259,7 +259,9 @@ class DecoderPS(Decoder):
         output_size = input_size
 
         # pointer softmax layers
-        self.switching_layer = nn.Linear(2 * hidden_size + hidden_size, 1, bias=False)
+        self.switching_layer = nn.Linear(2 * hidden_size + hidden_size, 1)
+        # init last layer biases to -1
+        nn.init.constant_(self.switching_layer.bias, -1)
         # normal output layer with output dim = vocab size
         self.dropout_layer = nn.Dropout(p=dropout)
         self.shortlist_softmax = nn.Linear(hidden_size + 2 * hidden_size + emb_size, output_size, bias=False)
@@ -298,7 +300,7 @@ class DecoderPS(Decoder):
         pointer_output = F.one_hot(src_indices, num_classes=vocab_output.size(-1)).to(torch.float32)  # [batch x 1 x output_size]
 
         # select based on switching variable
-        output = torch.where(switch_prob == 1, vocab_output, pointer_output)  # [batch x 1 x output_size]
+        output = torch.where(~switch_prob.byte(), vocab_output, pointer_output)  # [batch x 1 x output_size]
 
         return output, hidden
 

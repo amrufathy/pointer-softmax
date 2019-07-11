@@ -29,7 +29,7 @@ class ModelManager:
         # model save path
         self.path = None
         # vocab to lookup words
-        self.vocab = src_vocab
+        self.vocab = src_vocab.itos
 
         # internal variables
         self.loss = None
@@ -148,7 +148,7 @@ class ModelManager:
         torch.backends.cudnn.deterministic = True
 
     def lookup_words(self, batch):
-        batch = [[self.vocab.itos[ind] if ind < len(self.vocab.itos) else self.vocab.itos[0] for ind in ex]
+        batch = [[self.vocab[ind] if ind < len(self.vocab) else self.vocab[0] for ind in ex]
                  for ex in batch]  # denumericalize
 
         def filter_special(tok):
@@ -169,7 +169,7 @@ class BaselineModelManager(ModelManager):
         # loss function criterion
         self.criterion = nn.NLLLoss(ignore_index=pad_idx)
         # gradient clip value
-        self.clip_value = 10
+        self.clip_value = 1
         # model save path
         self.path = 'models/baseline.pt'
 
@@ -184,6 +184,6 @@ class PointerSoftmaxModelManager(ModelManager):
         # loss function criterion
         self.criterion = nn.NLLLoss(ignore_index=pad_idx)
         # gradient clip value
-        self.clip_value = 10
+        self.clip_value = 1
         # model save path
         self.path = 'models/pointer_softmax.pt'

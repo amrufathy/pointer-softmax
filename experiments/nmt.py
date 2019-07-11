@@ -1,6 +1,6 @@
 import torch
 from torchtext.data import Field, BucketIterator
-from torchtext.datasets import Multi30k, IWSLT, WMT14
+from torchtext.datasets import IWSLT, Multi30k
 
 from src.manager import BaselineModelManager, PointerSoftmaxModelManager
 
@@ -22,20 +22,15 @@ pad_idx = trg.vocab.stoi['<pad>']
 
 N_EPOCHS = 10
 
-best_validation_loss = float('inf')
-
 model = BaselineModelManager(src_vocab=src.vocab, tgt_vocab=trg.vocab, pad_idx=pad_idx)
 # model = PointerSoftmaxModelManager(src_vocab=src.vocab, tgt_vocab=trg.vocab, pad_idx=pad_idx)
 
 for epoch in range(N_EPOCHS):
     train_loss = model.train(train_iterator)
-    valid_loss, _ = model.evaluate(valid_iterator)
+    valid_loss, valid_acc = model.evaluate(valid_iterator)
     model.save_checkpoint()
 
-    if valid_loss < best_validation_loss:
-        best_validation_loss = valid_loss
-
-    print(f'| Epoch: {epoch + 1:03} | Train Loss: {train_loss:.3f} | Val. Loss: {valid_loss:.3f} |')
+    print(f'| Epoch: {epoch + 1:03} | Train Loss: {train_loss:.3f} | Val. Loss: {valid_loss:.3f} | Val. Acc.: {valid_acc:.3f}')
 
 model.load_checkpoint()
 test_loss, test_accuracy = model.evaluate(test_iterator)
