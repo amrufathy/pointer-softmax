@@ -13,7 +13,7 @@ class ModelManager:
 
         - Train Loop
         - Evaluate Loop
-        - TODO: early stopping, save/load checkpoint, better logging
+        - TODO: early stopping, better logging
     """
 
     # noinspection PyUnusedLocal
@@ -167,7 +167,7 @@ class BaselineModelManager(ModelManager):
         # optimizer
         self.optimizer = optim.Adam(self.model.parameters())
         # loss function criterion
-        self.criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+        self.criterion = nn.NLLLoss(ignore_index=pad_idx)
         # gradient clip value
         self.clip_value = 10
         # model save path
@@ -182,7 +182,7 @@ class PointerSoftmaxModelManager(ModelManager):
         # optimizer
         self.optimizer = optim.Adam(self.model.parameters())
         # loss function criterion
-        self.criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+        self.criterion = nn.NLLLoss(ignore_index=pad_idx)
         # gradient clip value
         self.clip_value = 10
         # model save path
