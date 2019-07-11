@@ -7,11 +7,12 @@ from src.manager import BaselineModelManager, PointerSoftmaxModelManager
 src = Field(batch_first=True, include_lengths=True, lower=True)
 trg = Field(batch_first=True, include_lengths=True, lower=True)
 
-train_data, val, test = Multi30k.splits(exts=('.en', '.de'), fields=(src, trg))
+train_data, val, test = IWSLT.splits(exts=('.en', '.de'), fields=(src, trg),
+                                     filter_pred=lambda x: max(len(vars(x)['src']), len(vars(x)['trg'])) <= 50)
 
 # build vocab using train data only
-src.build_vocab(train_data, min_freq=2)
-trg.build_vocab(train_data, min_freq=2)
+src.build_vocab(train_data, min_freq=2, max_size=7700)
+trg.build_vocab(train_data, min_freq=2, max_size=9500)
 
 device = torch.device('cuda')
 
